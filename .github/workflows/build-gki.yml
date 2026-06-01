@@ -47,71 +47,42 @@ on:
 # Matrix — one job per GKI kernel branch
 # ─────────────────────────────────────────────────────────────────────────────
 jobs:
+  # Generates the build matrix dynamically so the 'kernels' filter works.
+  # (matrix context is not available in job-level if expressions on GitHub Actions)
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+      - name: Generate build matrix
+        id: gen
+        env:
+          KERNELS: ${{ github.event.inputs.kernels || 'all' }}
+        run: |
+          ALL='[
+            {"version":"android12-5.10","android_version":"android12","kernel_version":"5.10","manifest_branch":"common-android12-5.10","susfs_branch":"gki-android12-5.10","build_method":"legacy","build_config":"common/build.config.gki.aarch64"},
+            {"version":"android13-5.10","android_version":"android13","kernel_version":"5.10","manifest_branch":"common-android13-5.10","susfs_branch":"gki-android13-5.10","build_method":"legacy","build_config":"common/build.config.gki.aarch64"},
+            {"version":"android13-5.15","android_version":"android13","kernel_version":"5.15","manifest_branch":"common-android13-5.15","susfs_branch":"gki-android13-5.15","build_method":"legacy","build_config":"common/build.config.gki.aarch64"},
+            {"version":"android14-5.15","android_version":"android14","kernel_version":"5.15","manifest_branch":"common-android14-5.15","susfs_branch":"gki-android14-5.15","build_method":"bazel","build_config":""},
+            {"version":"android14-6.1","android_version":"android14","kernel_version":"6.1","manifest_branch":"common-android14-6.1","susfs_branch":"gki-android14-6.1","build_method":"bazel","build_config":""},
+            {"version":"android15-6.6","android_version":"android15","kernel_version":"6.6","manifest_branch":"common-android15-6.6","susfs_branch":"gki-android15-6.6","build_method":"bazel","build_config":""}
+          ]'
+          if [[ "$KERNELS" == "all" ]]; then
+            INCLUDE="$ALL"
+          else
+            INCLUDE=$(echo "$ALL" | jq --arg v "$KERNELS" '[.[] | select(.version == $v)]')
+          fi
+          echo "matrix={\"include\":$(echo "$INCLUDE" | jq -c .)}" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: setup
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # ── Android 12 ────────────────────────────────────────────────────
-          - version:          android12-5.10
-            android_version:  android12
-            kernel_version:   "5.10"
-            manifest_branch:  common-android12-5.10
-            susfs_branch:     gki-android12-5.10
-            build_method:     legacy
-            build_config:     common/build.config.gki.aarch64
-
-          # ── Android 13 ────────────────────────────────────────────────────
-          - version:          android13-5.10
-            android_version:  android13
-            kernel_version:   "5.10"
-            manifest_branch:  common-android13-5.10
-            susfs_branch:     gki-android13-5.10
-            build_method:     legacy
-            build_config:     common/build.config.gki.aarch64
-
-          - version:          android13-5.15
-            android_version:  android13
-            kernel_version:   "5.15"
-            manifest_branch:  common-android13-5.15
-            susfs_branch:     gki-android13-5.15
-            build_method:     legacy
-            build_config:     common/build.config.gki.aarch64
-
-          # ── Android 14 ────────────────────────────────────────────────────
-          - version:          android14-5.15
-            android_version:  android14
-            kernel_version:   "5.15"
-            manifest_branch:  common-android14-5.15
-            susfs_branch:     gki-android14-5.15
-            build_method:     bazel
-            build_config:     ""
-
-          - version:          android14-6.1
-            android_version:  android14
-            kernel_version:   "6.1"
-            manifest_branch:  common-android14-6.1
-            susfs_branch:     gki-android14-6.1
-            build_method:     bazel
-            build_config:     ""
-
-          # ── Android 15 ────────────────────────────────────────────────────
-          - version:          android15-6.6
-            android_version:  android15
-            kernel_version:   "6.6"
-            manifest_branch:  common-android15-6.6
-            susfs_branch:     gki-android15-6.6
-            build_method:     bazel
-            build_config:     ""
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
 
     name: "${{ matrix.version }}"
     runs-on: ubuntu-latest
     timeout-minutes: 180
-
-    # Skip matrix entries that weren't requested
-    if: >
-      github.event.inputs.kernels == 'all' ||
-      contains(github.event.inputs.kernels, matrix.version)
 
     env:
       KSU_TAG:    ${{ github.event.inputs.kernelsu_tag  || 'main' }}
@@ -386,7 +357,7 @@ jobs:
 # ─────────────────────────────────────────────────────────────────────────────
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [setup, build]
     runs-on: ubuntu-latest
     if: ${{ github.event.inputs.release == 'true' }}
     permissions:
