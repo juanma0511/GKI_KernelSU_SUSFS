@@ -327,25 +327,7 @@ jobs:
           printf 'CONFIG_KSU_SUSFS_ENABLE_LOG=y\n'    >> "$DEFCONFIG"
           printf 'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y\n' >> "$DEFCONFIG"
           printf 'CONFIG_KSU_SUSFS_SUS_SU=y\n'        >> "$DEFCONFIG"
-          echo "Config appended to gki_defconfig"
-
-          # For Bazel: write a fragment (only the new options, not the full defconfig)
-          if [[ "${{ matrix.build_method }}" == "bazel" ]]; then
-            FRAGMENT="kernel/common/arch/arm64/configs/gki_ksu_susfs.fragment"
-            printf 'CONFIG_KSU=y\n'                     > "$FRAGMENT"
-            printf 'CONFIG_KSU_SUSFS=y\n'               >> "$FRAGMENT"
-            printf 'CONFIG_KSU_SUSFS_SUS_PATH=y\n'      >> "$FRAGMENT"
-            printf 'CONFIG_KSU_SUSFS_SUS_MOUNT=y\n'     >> "$FRAGMENT"
-            printf 'CONFIG_KSU_SUSFS_SUS_KSTAT=y\n'     >> "$FRAGMENT"
-            printf 'CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y\n' >> "$FRAGMENT"
-            printf 'CONFIG_KSU_SUSFS_TRY_UMOUNT=y\n'    >> "$FRAGMENT"
-            printf 'CONFIG_KSU_SUSFS_SPOOF_UNAME=y\n'   >> "$FRAGMENT"
-            printf 'CONFIG_KSU_SUSFS_ENABLE_LOG=y\n'    >> "$FRAGMENT"
-            printf 'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y\n' >> "$FRAGMENT"
-            printf 'CONFIG_KSU_SUSFS_SUS_SU=y\n'        >> "$FRAGMENT"
-            echo "SUSFS_FRAGMENT=//common:arch/arm64/configs/gki_ksu_susfs.fragment" >> "$GITHUB_ENV"
-            echo "Fragment written to ${FRAGMENT}"
-          fi
+          echo "Config appended to gki_defconfig (read by both legacy and Bazel builds)"
 
       # ── 7. Build ──────────────────────────────────────────────────────────
       - name: Build kernel (legacy — build.sh)
@@ -389,10 +371,11 @@ jobs:
         run: |
           cd kernel
           mkdir -p "${OUT_DIR}"
+          # KSU/SUSFS configs are already appended to gki_defconfig, which this
+          # target reads — no --defconfig_fragment needed (kleaf rejects it).
           tools/bazel run \
             --config=fast \
             --config=stamp \
-            --defconfig_fragment="${SUSFS_FRAGMENT}" \
             --disk_cache=/home/runner/.cache/bazel \
             //common:kernel_aarch64_dist \
             -- --dist_dir="${OUT_DIR}"
