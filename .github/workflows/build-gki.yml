@@ -10,6 +10,7 @@ name: Build GKI Kernels — KernelSU + SUSFS
 
 permissions:
   contents: write
+  actions: read   # needed to fetch the ccache artifact from previous runs
 
 on:
   workflow_dispatch:
@@ -37,6 +38,11 @@ on:
           - android14-5.15
           - android14-6.1
           - android15-6.6
+      use_ccache:
+        description: 'Reuse ccache/bazel cache from the last run (faster rebuilds)'
+        required: false
+        default: true
+        type: boolean
       release:
         description: 'Create GitHub Release after successful build'
         required: false
@@ -144,6 +150,44 @@ jobs:
           git config --global user.email "juanma0511@proton.me"
           git config --global user.name  "Juan Martín"
           git config --global color.ui   false
+
+      # ── 2b. Restore build cache (ccache for legacy, bazel disk-cache) ─────
+      - name: Determine cache directory
+        if: ${{ inputs.use_ccache }}
+        run: |
+          if [[ "${{ matrix.build_method }}" == "legacy" ]]; then
+            echo "CACHE_DIR=/home/runner/.ccache" >> "$GITHUB_ENV"
+          else
+            echo "CACHE_DIR=/home/runner/.cache/bazel" >> "$GITHUB_ENV"
+          fi
+
+      - name: Fetch build cache from latest run
+        if: ${{ inputs.use_ccache }}
+        continue-on-error: true
+        uses: dawidd6/action-download-artifact@v6
+        with:
+          name: buildcache-${{ matrix.version }}
+          path: /home/runner/buildcache-in
+          workflow_conclusion: ""
+          search_artifacts: true
+          if_no_artifact_found: warn
+
+      - name: Unpack build cache
+        if: ${{ inputs.use_ccache }}
+        run: |
+          mkdir -p "${CACHE_DIR}"
+          if [ -f /home/runner/buildcache-in/cache.tar.gz ]; then
+            tar -xzf /home/runner/buildcache-in/cache.tar.gz -C / \
+              && echo "Restored cache into ${CACHE_DIR}"
+          else
+            echo "No previous cache found — this will be a cold build"
+          fi
+          if [[ "${{ matrix.build_method }}" == "legacy" ]]; then
+            export CCACHE_DIR="${CACHE_DIR}"
+            ccache -M 2G
+            ccache -z          # zero stats so we can see hit rate for this build
+            ccache -s || true
+          fi
 
       # ── 3. Sync kernel sources ────────────────────────────────────────────
       - name: Sync kernel source — ${{ matrix.version }}
@@ -319,10 +363,20 @@ jobs:
           done
 
           mkdir -p "${OUT_DIR}"
-          LTO=thin \
-          OUT_DIR="${OUT_DIR}" \
-          BUILD_CONFIG="${{ matrix.build_config }}" \
-            build/build.sh
+          if [ "${{ inputs.use_ccache }}" = "true" ]; then
+            export CCACHE_DIR=/home/runner/.ccache
+            LTO=thin \
+            OUT_DIR="${OUT_DIR}" \
+            BUILD_CONFIG="${{ matrix.build_config }}" \
+              build/build.sh CC="ccache clang" CXX="ccache clang++"
+            echo "=== ccache stats after build ==="
+            ccache -s || true
+          else
+            LTO=thin \
+            OUT_DIR="${OUT_DIR}" \
+            BUILD_CONFIG="${{ matrix.build_config }}" \
+              build/build.sh
+          fi
 
       - name: Build kernel (Bazel — kleaf)
         if: matrix.build_method == 'bazel'
@@ -363,6 +417,34 @@ jobs:
           echo "--- Artifact contents ---"
           ls -lh "${ARTIFACT_DIR}/"
 
+      - name: Package flashable AnyKernel3 zip
+        run: |
+          ARTIFACT_DIR="${GITHUB_WORKSPACE}/artifacts"
+
+          # Pick the first available kernel image (priority: Image, then compressed)
+          IMG=""
+          for cand in Image Image.gz Image.lz4; do
+            if [ -f "${ARTIFACT_DIR}/${cand}" ]; then IMG="${cand}"; break; fi
+          done
+          if [ -z "${IMG}" ]; then
+            echo "No kernel Image found — skipping AnyKernel3 packaging"
+            exit 0
+          fi
+
+          echo "Cloning AnyKernel3 (gki-2.0)..."
+          git clone --depth=1 -b gki-2.0 \
+            https://github.com/juanma0511/AnyKernel3.git ak3
+
+          # AnyKernel3 flashes the image named "Image" from the zip root
+          cp -v "${ARTIFACT_DIR}/${IMG}" "ak3/Image"
+
+          ZIP_NAME="AnyKernel3-${{ matrix.version }}-KernelSU-${KSU_TAG}-SUSFS-$(date +%Y%m%d).zip"
+          ( cd ak3 && zip -r9 "${ARTIFACT_DIR}/${ZIP_NAME}" . -x '.git*' )
+          echo "Created ${ZIP_NAME}"
+
+          echo "--- Final artifact contents ---"
+          ls -lh "${ARTIFACT_DIR}/"
+
       - name: Upload artifacts — ${{ matrix.version }}
         uses: actions/upload-artifact@v4
         with:
@@ -372,6 +454,29 @@ jobs:
           if-no-files-found: warn
           compression-level: 9
           retention-days: 14
+
+      # ── 9. Save build cache for the next run ──────────────────────────────
+      - name: Pack build cache
+        if: ${{ always() && inputs.use_ccache }}
+        run: |
+          if [ -d "${CACHE_DIR}" ] && [ -n "$(ls -A "${CACHE_DIR}" 2>/dev/null)" ]; then
+            mkdir -p /home/runner/buildcache-out
+            REL="${CACHE_DIR#/}"   # strip leading slash so tar stores a relative path
+            tar -czf /home/runner/buildcache-out/cache.tar.gz -C / "${REL}"
+            echo "Packed ${CACHE_DIR} ($(du -sh /home/runner/buildcache-out/cache.tar.gz | cut -f1))"
+          else
+            echo "Cache directory empty — nothing to save"
+          fi
+
+      - name: Upload build cache
+        if: ${{ always() && inputs.use_ccache }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: buildcache-${{ matrix.version }}
+          path: /home/runner/buildcache-out/cache.tar.gz
+          if-no-files-found: ignore
+          retention-days: 7
+          overwrite: true
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Release — runs after all builds succeed (only when requested)
