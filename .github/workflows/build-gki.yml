@@ -61,8 +61,8 @@ jobs:
         run: |
           ALL='[
             {"version":"android12-5.10","android_version":"android12","kernel_version":"5.10","manifest_branch":"common-android12-5.10","susfs_branch":"gki-android12-5.10","build_method":"legacy","build_config":"common/build.config.gki.aarch64"},
-            {"version":"android13-5.10","android_version":"android13","kernel_version":"5.10","manifest_branch":"common-android13-5.10","susfs_branch":"gki-android13-5.10","build_method":"legacy","build_config":"common/build.config.gki.aarch64"},
-            {"version":"android13-5.15","android_version":"android13","kernel_version":"5.15","manifest_branch":"common-android13-5.15","susfs_branch":"gki-android13-5.15","build_method":"legacy","build_config":"common/build.config.gki.aarch64"},
+            {"version":"android13-5.10","android_version":"android13","kernel_version":"5.10","manifest_branch":"common-android13-5.10","susfs_branch":"gki-android13-5.10","build_method":"bazel","build_config":""},
+            {"version":"android13-5.15","android_version":"android13","kernel_version":"5.15","manifest_branch":"common-android13-5.15","susfs_branch":"gki-android13-5.15","build_method":"bazel","build_config":""},
             {"version":"android14-5.15","android_version":"android14","kernel_version":"5.15","manifest_branch":"common-android14-5.15","susfs_branch":"gki-android14-5.15","build_method":"bazel","build_config":""},
             {"version":"android14-6.1","android_version":"android14","kernel_version":"6.1","manifest_branch":"common-android14-6.1","susfs_branch":"gki-android14-6.1","build_method":"bazel","build_config":""},
             {"version":"android15-6.6","android_version":"android15","kernel_version":"6.6","manifest_branch":"common-android15-6.6","susfs_branch":"gki-android15-6.6","build_method":"bazel","build_config":""}
