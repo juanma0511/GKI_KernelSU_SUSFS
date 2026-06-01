@@ -365,10 +365,16 @@ jobs:
           mkdir -p "${OUT_DIR}"
           if [ "${{ inputs.use_ccache }}" = "true" ]; then
             export CCACHE_DIR=/home/runner/.ccache
+            CCACHE_BIN="$(command -v ccache)"   # absolute path: kernel build uses a hermetic PATH without /usr/bin
+            echo "Using ccache at: ${CCACHE_BIN}"
             LTO=thin \
             OUT_DIR="${OUT_DIR}" \
             BUILD_CONFIG="${{ matrix.build_config }}" \
-              build/build.sh CC="ccache clang" CXX="ccache clang++"
+              build/build.sh \
+                CC="${CCACHE_BIN} clang" \
+                CXX="${CCACHE_BIN} clang++" \
+                HOSTCC="${CCACHE_BIN} clang" \
+                HOSTCXX="${CCACHE_BIN} clang++"
             echo "=== ccache stats after build ==="
             ccache -s || true
           else
