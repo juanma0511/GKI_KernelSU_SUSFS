@@ -456,7 +456,7 @@ jobs:
         with:
           name: >-
             kernel-${{ matrix.version }}-KernelSU-${{ env.KSU_TAG }}-SUSFS-${{ env.OS_PATCH }}
-          path: artifacts/
+          path: artifacts/*.zip
           if-no-files-found: warn
           compression-level: 9
           retention-days: 14
