@@ -266,26 +266,24 @@ jobs:
       # ── 6. Kernel configuration ───────────────────────────────────────────
       - name: Write SUSFS + KSU config options
         run: |
-          CONFIGS="CONFIG_KSU=y
-CONFIG_KSU_SUSFS=y
-CONFIG_KSU_SUSFS_SUS_PATH=y
-CONFIG_KSU_SUSFS_SUS_MOUNT=y
-CONFIG_KSU_SUSFS_SUS_KSTAT=y
-CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y
-CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-CONFIG_KSU_SUSFS_ENABLE_LOG=y
-CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-CONFIG_KSU_SUSFS_SUS_SU=y"
-
-          # Always append to gki_defconfig (legacy + Bazel both read it)
-          printf '%s\n' "$CONFIGS" >> kernel/common/arch/arm64/configs/gki_defconfig
+          DEFCONFIG="kernel/common/arch/arm64/configs/gki_defconfig"
+          printf 'CONFIG_KSU=y\n'                    >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS=y\n'              >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_SUS_PATH=y\n'     >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_SUS_MOUNT=y\n'    >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_SUS_KSTAT=y\n'    >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y\n' >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_TRY_UMOUNT=y\n'   >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_SPOOF_UNAME=y\n'  >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_ENABLE_LOG=y\n'   >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y\n' >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_SUS_SU=y\n'       >> "$DEFCONFIG"
           echo "Config appended to gki_defconfig"
 
           # For Bazel: also write a fragment file and export its label
           if [[ "${{ matrix.build_method }}" == "bazel" ]]; then
             FRAGMENT="kernel/common/arch/arm64/configs/gki_ksu_susfs.fragment"
-            printf '%s\n' "$CONFIGS" > "${FRAGMENT}"
+            cp "$DEFCONFIG" "$FRAGMENT"
             echo "SUSFS_FRAGMENT=//common:arch/arm64/configs/gki_ksu_susfs.fragment" >> "$GITHUB_ENV"
             echo "Fragment written to ${FRAGMENT}"
           fi
@@ -325,9 +323,9 @@ CONFIG_KSU_SUSFS_SUS_SU=y"
 
           # Search possible output locations in priority order
           for dir in \
-            "${OUT_DIR}" \
             "${OUT_DIR}/dist" \
-            "${OUT_DIR}/android-${{ matrix.kernel_version }}/dist"; do
+            "${OUT_DIR}/android-${{ matrix.kernel_version }}/dist" \
+            "${OUT_DIR}"; do
             if [[ -f "${dir}/Image" ]]; then
               echo "Kernel image found at: ${dir}"
               cp -v "${dir}/Image"      "${ARTIFACT_DIR}/"  2>/dev/null || true
@@ -389,7 +387,7 @@ CONFIG_KSU_SUSFS_SUS_SU=y"
           prerelease: false
           files:      release-artifacts/**/*
           body: |
-            ## GKI Kernels · KernelSU (official) + SUSFS
+            ## GKI Kernels · KernelSU (official) + SUSFS 2.1.0
 
             | Parameter       | Value                                          |
             |-----------------|------------------------------------------------|
