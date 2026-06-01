@@ -266,21 +266,29 @@ jobs:
       # ── 6. Kernel configuration ───────────────────────────────────────────
       - name: Write SUSFS + KSU config options
         run: |
-          DEFCONFIG="kernel/common/arch/arm64/configs/gki_defconfig"
-          {
-            echo "CONFIG_KSU=y"
-            echo "CONFIG_KSU_SUSFS=y"
-            echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
-            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y"
-            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
-            echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y"
-            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y"
-            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y"
-            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y"
-            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y"
-            echo "CONFIG_KSU_SUSFS_SUS_SU=y"
-          } >> "${DEFCONFIG}"
-          echo "KSU/SUSFS config appended to ${DEFCONFIG}"
+          CONFIGS="CONFIG_KSU=y
+CONFIG_KSU_SUSFS=y
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y
+CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_ENABLE_LOG=y
+CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+CONFIG_KSU_SUSFS_SUS_SU=y"
+
+          # Always append to gki_defconfig (legacy + Bazel both read it)
+          printf '%s\n' "$CONFIGS" >> kernel/common/arch/arm64/configs/gki_defconfig
+          echo "Config appended to gki_defconfig"
+
+          # For Bazel: also write a fragment file and export its label
+          if [[ "${{ matrix.build_method }}" == "bazel" ]]; then
+            FRAGMENT="kernel/common/arch/arm64/configs/gki_ksu_susfs.fragment"
+            printf '%s\n' "$CONFIGS" > "${FRAGMENT}"
+            echo "SUSFS_FRAGMENT=//common:arch/arm64/configs/gki_ksu_susfs.fragment" >> "$GITHUB_ENV"
+            echo "Fragment written to ${FRAGMENT}"
+          fi
 
       # ── 7. Build ──────────────────────────────────────────────────────────
       - name: Build kernel (legacy — build.sh)
@@ -288,22 +296,26 @@ jobs:
         run: |
           cd kernel
           mkdir -p "${OUT_DIR}"
-          JOBS=$(nproc --all) \
+          SKIP_VENDOR_BOOT=1 \
+          SKIP_EXT_MODULES=1 \
+          SKIP_CP_KERNEL_HDR=1 \
           LTO=thin \
           OUT_DIR="${OUT_DIR}" \
           BUILD_CONFIG="${{ matrix.build_config }}" \
-            build/build.sh
+            build/build.sh -j"$(nproc)"
 
       - name: Build kernel (Bazel — kleaf)
         if: matrix.build_method == 'bazel'
         run: |
           cd kernel
-          mkdir -p "${OUT_DIR}/dist"
+          mkdir -p "${OUT_DIR}"
           tools/bazel run \
             --config=fast \
             --config=stamp \
+            --defconfig_fragment="${SUSFS_FRAGMENT}" \
+            --disk_cache=/home/runner/.cache/bazel \
             //common:kernel_aarch64_dist \
-            -- --dist_dir="${OUT_DIR}/dist"
+            -- --dist_dir="${OUT_DIR}"
 
       # ── 8. Collect & upload artifacts ─────────────────────────────────────
       - name: Collect kernel artifacts
@@ -313,9 +325,9 @@ jobs:
 
           # Search possible output locations in priority order
           for dir in \
+            "${OUT_DIR}" \
             "${OUT_DIR}/dist" \
-            "${OUT_DIR}/android-${{ matrix.kernel_version }}/dist" \
-            "${OUT_DIR}"; do
+            "${OUT_DIR}/android-${{ matrix.kernel_version }}/dist"; do
             if [[ -f "${dir}/Image" ]]; then
               echo "Kernel image found at: ${dir}"
               cp -v "${dir}/Image"      "${ARTIFACT_DIR}/"  2>/dev/null || true
