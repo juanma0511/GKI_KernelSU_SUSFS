@@ -1,0 +1,460 @@
+name: Build GKI Kernels — KernelSU + SUSFS
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Builds Android GKI kernels for every supported branch with:
+#   • Official KernelSU  (https://github.com/tiann/KernelSU)
+#   • SUSFS              (https://gitlab.com/simonpunk/susfs4ksu)
+#
+# Base build pattern derived from WildKernels/GKI_KernelSU_SUSFS.
+# ─────────────────────────────────────────────────────────────────────────────
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernelsu_tag:
+        description: 'KernelSU tag / branch  (e.g. v1.0.5  or  main)'
+        required: false
+        default: 'main'
+        type: string
+      os_patch_level:
+        description: 'OS patch level  (YYYY-MM  e.g. 2025-05)'
+        required: false
+        default: '2025-05'
+        type: string
+      kernels:
+        description: 'Kernels to build  (comma-separated or "all")'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - android12-5.10
+          - android13-5.10
+          - android13-5.15
+          - android14-5.15
+          - android14-6.1
+          - android15-6.6
+      release:
+        description: 'Create GitHub Release after successful build'
+        required: false
+        default: false
+        type: boolean
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Matrix — one job per GKI kernel branch
+# ─────────────────────────────────────────────────────────────────────────────
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Android 12 ────────────────────────────────────────────────────
+          - version:          android12-5.10
+            android_version:  android12
+            kernel_version:   "5.10"
+            manifest_branch:  common-android12-5.10
+            susfs_branch:     gki-android12-5.10
+            build_method:     legacy
+            build_config:     common/build.config.gki.aarch64
+
+          # ── Android 13 ────────────────────────────────────────────────────
+          - version:          android13-5.10
+            android_version:  android13
+            kernel_version:   "5.10"
+            manifest_branch:  common-android13-5.10
+            susfs_branch:     gki-android13-5.10
+            build_method:     legacy
+            build_config:     common/build.config.gki.aarch64
+
+          - version:          android13-5.15
+            android_version:  android13
+            kernel_version:   "5.15"
+            manifest_branch:  common-android13-5.15
+            susfs_branch:     gki-android13-5.15
+            build_method:     legacy
+            build_config:     common/build.config.gki.aarch64
+
+          # ── Android 14 ────────────────────────────────────────────────────
+          - version:          android14-5.15
+            android_version:  android14
+            kernel_version:   "5.15"
+            manifest_branch:  common-android14-5.15
+            susfs_branch:     gki-android14-5.15
+            build_method:     bazel
+            build_config:     ""
+
+          - version:          android14-6.1
+            android_version:  android14
+            kernel_version:   "6.1"
+            manifest_branch:  common-android14-6.1
+            susfs_branch:     gki-android14-6.1
+            build_method:     bazel
+            build_config:     ""
+
+          # ── Android 15 ────────────────────────────────────────────────────
+          - version:          android15-6.6
+            android_version:  android15
+            kernel_version:   "6.6"
+            manifest_branch:  common-android15-6.6
+            susfs_branch:     gki-android15-6.6
+            build_method:     bazel
+            build_config:     ""
+
+    name: "${{ matrix.version }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    # Skip matrix entries that weren't requested
+    if: >
+      github.event.inputs.kernels == 'all' ||
+      contains(github.event.inputs.kernels, matrix.version)
+
+    env:
+      KSU_TAG:    ${{ github.event.inputs.kernelsu_tag  || 'main' }}
+      OS_PATCH:   ${{ github.event.inputs.os_patch_level || '2025-05' }}
+      OUT_DIR:    /home/runner/out
+      SUSFS_DIR:  /home/runner/susfs4ksu
+
+    steps:
+      # ── 0. Checkout ───────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 1. Disk space ─────────────────────────────────────────────────────
+      - name: Free disk space
+        uses: endersonmenezes/free-disk-space@v3
+        with:
+          remove_android:              true
+          remove_dotnet:               true
+          remove_haskell:              true
+          remove_tool_cache:           true
+          remove_packages:             >
+            azure-cli google-cloud-cli microsoft-edge-stable
+            google-chrome-stable firefox postgresql* temurin-*
+            *llvm* mysql* dotnet-sdk-*
+          remove_packages_one_command: true
+          remove_folders: >
+            /usr/share/swift /usr/share/miniconda /usr/share/az*
+            /usr/local/lib/node_modules /usr/local/share/chromium
+            /usr/local/share/powershell /usr/local/julia
+            /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle
+          testing: false
+
+      - name: Add swap (needed for LTO)
+        uses: thejerrybao/setup-swap-space@v1
+        with:
+          swap-size-gb: 16
+
+      # ── 2. Build tools ────────────────────────────────────────────────────
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            git-core gnupg flex bison build-essential zip curl \
+            zlib1g-dev libc6-dev-i386 libncurses-dev x11proto-core-dev \
+            libx11-dev lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc \
+            unzip fontconfig python3 python3-pip bc cpio rsync kmod \
+            pahole libelf-dev libssl-dev ccache
+          pip3 install --quiet absl-py
+
+      - name: Set up repo tool
+        run: |
+          mkdir -p ~/bin
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      - name: Configure git
+        run: |
+          git config --global user.email "juanma0511@proton.me"
+          git config --global user.name  "Juan Martín"
+          git config --global color.ui   false
+
+      # ── 3. Sync kernel sources ────────────────────────────────────────────
+      - name: Sync kernel source — ${{ matrix.version }}
+        run: |
+          mkdir -p kernel && cd kernel
+
+          # Try patch-level branch first; fall back to the base branch
+          BRANCH_FULL="${{ matrix.manifest_branch }}-${OS_PATCH}"
+          BRANCH_BASE="${{ matrix.manifest_branch }}"
+
+          echo "Trying branch: ${BRANCH_FULL}"
+          if ! repo init \
+                 -u https://android.googlesource.com/kernel/manifest \
+                 -b "${BRANCH_FULL}" \
+                 --depth=1 2>/dev/null; then
+            echo "Patch-level branch not found — falling back to ${BRANCH_BASE}"
+            repo init \
+              -u https://android.googlesource.com/kernel/manifest \
+              -b "${BRANCH_BASE}" \
+              --depth=1
+          fi
+
+          # Retry sync up to 3 times
+          for i in 1 2 3; do
+            repo sync \
+              -c \
+              -j$(nproc --all) \
+              --current-branch \
+              --no-clone-bundle \
+              --no-tags \
+              --force-sync && break
+            echo "Sync attempt $i/3 failed; retrying in 15 s..."
+            sleep 15
+          done
+
+      # ── 4. Official KernelSU ──────────────────────────────────────────────
+      - name: Set up KernelSU (official — tiann/KernelSU)
+        run: |
+          cd kernel/common
+
+          echo "Installing KernelSU (${KSU_TAG}) into kernel source..."
+          curl -LSs \
+            "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" \
+            | bash -s "${KSU_TAG}"
+
+          # Collect version metadata
+          pushd KernelSU > /dev/null
+          KSU_VER=$(git describe --tags --abbrev=0 2>/dev/null \
+                    || git rev-parse --short HEAD)
+          KSU_COMMITS=$(git rev-list --count HEAD)
+          KSU_CODE=$(( KSU_COMMITS + 10200 ))
+          echo "KSU_TAG=${KSU_VER}"      >> $GITHUB_ENV
+          echo "KSU_CODE=${KSU_CODE}"    >> $GITHUB_ENV
+          echo "KernelSU version : ${KSU_VER}  (version code: ${KSU_CODE})"
+          popd > /dev/null
+
+      # ── 5. SUSFS patches ──────────────────────────────────────────────────
+      - name: Clone SUSFS4KSU — branch ${{ matrix.susfs_branch }}
+        run: |
+          SUSFS_BRANCH="${{ matrix.susfs_branch }}"
+          echo "Cloning susfs4ksu (${SUSFS_BRANCH})..."
+
+          if ! git clone --depth=1 \
+                 -b "${SUSFS_BRANCH}" \
+                 https://gitlab.com/simonpunk/susfs4ksu.git \
+                 "${SUSFS_DIR}" 2>/dev/null; then
+            echo "Branch ${SUSFS_BRANCH} not found — using gki-android14-5.15 as fallback"
+            git clone --depth=1 \
+              -b gki-android14-5.15 \
+              https://gitlab.com/simonpunk/susfs4ksu.git \
+              "${SUSFS_DIR}"
+          fi
+
+      - name: Apply SUSFS kernel patches
+        working-directory: kernel/common
+        run: |
+          PATCH_DIR="${SUSFS_DIR}/kernel_patches"
+          shopt -s nullglob
+
+          echo "=== Applying kernel patches from ${PATCH_DIR} ==="
+          for patch in "${PATCH_DIR}"/*.patch; do
+            echo "  → $(basename "${patch}")"
+            if ! patch -p1 --forward < "${patch}"; then
+              echo "    patch(1) failed — retrying with git apply..."
+              git apply --reject "${patch}" || {
+                echo "    WARNING: patch $(basename "${patch}") had rejects — continuing"
+              }
+            fi
+          done
+
+          for patch in "${PATCH_DIR}"/**/*.patch; do
+            echo "  → $(basename "${patch}")"
+            patch -p1 --forward < "${patch}" || \
+              git apply --reject "${patch}" || true
+          done
+
+      - name: Apply SUSFS KernelSU patches
+        working-directory: kernel/common/KernelSU
+        run: |
+          PATCH_DIR="${SUSFS_DIR}/ksu_patches"
+          shopt -s nullglob
+
+          echo "=== Applying KernelSU patches from ${PATCH_DIR} ==="
+          for patch in "${PATCH_DIR}"/*.patch; do
+            echo "  → $(basename "${patch}")"
+            if ! patch -p1 --forward < "${patch}"; then
+              echo "    patch(1) failed — retrying with git apply..."
+              git apply --reject "${patch}" || {
+                echo "    WARNING: patch $(basename "${patch}") had rejects — continuing"
+              }
+            fi
+          done
+
+      # ── 6. Kernel configuration ───────────────────────────────────────────
+      - name: Write SUSFS + KSU config options
+        run: |
+          CONFIGS=$(cat << 'CFGEOF'
+          CONFIG_KSU=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KSU_SUSFS_SUS_SU=y
+          CFGEOF
+          )
+
+          if [[ "${{ matrix.build_method }}" == "legacy" ]]; then
+            DEFCONFIG="kernel/common/arch/arm64/configs/gki_defconfig"
+            echo "${CONFIGS}" >> "${DEFCONFIG}"
+            echo "Config written to ${DEFCONFIG}"
+          else
+            FRAGMENT="kernel/common/arch/arm64/configs/gki_ksu_susfs.fragment"
+            echo "${CONFIGS}" > "${FRAGMENT}"
+            echo "SUSFS_FRAGMENT=//common:arch/arm64/configs/gki_ksu_susfs.fragment" \
+              >> $GITHUB_ENV
+            echo "Config fragment written to ${FRAGMENT}"
+          fi
+
+      # ── 7. Build ──────────────────────────────────────────────────────────
+      - name: Build kernel (legacy — build.sh)
+        if: matrix.build_method == 'legacy'
+        run: |
+          cd kernel
+          mkdir -p "${OUT_DIR}"
+          LTO=thin \
+          OUT_DIR="${OUT_DIR}" \
+          BUILD_CONFIG="${{ matrix.build_config }}" \
+            build/build.sh -j$(nproc --all)
+
+      - name: Build kernel (Bazel — kleaf)
+        if: matrix.build_method == 'bazel'
+        run: |
+          cd kernel
+          mkdir -p "${OUT_DIR}/dist"
+
+          FRAGMENT_ARG=""
+          if [[ -n "${{ env.SUSFS_FRAGMENT }}" ]]; then
+            FRAGMENT_ARG="--defconfig_fragment=${{ env.SUSFS_FRAGMENT }}"
+          fi
+
+          tools/bazel run \
+            --config=fast \
+            --config=stamp \
+            ${FRAGMENT_ARG} \
+            //common:kernel_aarch64_dist \
+            -- --dist_dir="${OUT_DIR}/dist"
+
+      # ── 8. Collect & upload artifacts ─────────────────────────────────────
+      - name: Collect kernel artifacts
+        run: |
+          ARTIFACT_DIR="${GITHUB_WORKSPACE}/artifacts"
+          mkdir -p "${ARTIFACT_DIR}"
+
+          # Search possible output locations in priority order
+          for dir in \
+            "${OUT_DIR}/dist" \
+            "${OUT_DIR}/android-${{ matrix.kernel_version }}/dist" \
+            "${OUT_DIR}"; do
+            if [[ -f "${dir}/Image" ]]; then
+              echo "Kernel image found at: ${dir}"
+              cp -v "${dir}/Image"      "${ARTIFACT_DIR}/"  2>/dev/null || true
+              cp -v "${dir}/Image.lz4"  "${ARTIFACT_DIR}/"  2>/dev/null || true
+              cp -v "${dir}/Image.gz"   "${ARTIFACT_DIR}/"  2>/dev/null || true
+              cp -v "${dir}/System.map" "${ARTIFACT_DIR}/"  2>/dev/null || true
+              find "${dir}" -maxdepth 1 -name "*.ko" \
+                -exec cp -v {} "${ARTIFACT_DIR}/" \;         2>/dev/null || true
+              break
+            fi
+          done
+
+          echo "--- Artifact contents ---"
+          ls -lh "${ARTIFACT_DIR}/"
+
+      - name: Upload artifacts — ${{ matrix.version }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: >-
+            kernel-${{ matrix.version }}-KernelSU-${{ env.KSU_TAG }}-SUSFS-${{ env.OS_PATCH }}
+          path: artifacts/
+          if-no-files-found: warn
+          compression-level: 9
+          retention-days: 14
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Release — runs after all builds succeed (only when requested)
+# ─────────────────────────────────────────────────────────────────────────────
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ github.event.inputs.release == 'true' }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts/
+
+      - name: Compute release tag
+        id: tag
+        run: |
+          TAG="r${{ github.run_number }}"
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "Release tag: ${TAG}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name:   ${{ steps.tag.outputs.tag }}
+          name:       "GKI KernelSU+SUSFS — Build #${{ github.run_number }}"
+          draft:      false
+          prerelease: false
+          files:      release-artifacts/**/*
+          body: |
+            ## GKI Kernels · KernelSU (official) + SUSFS
+
+            | Parameter       | Value                                          |
+            |-----------------|------------------------------------------------|
+            | Build #         | ${{ github.run_number }}                       |
+            | KernelSU        | ${{ github.event.inputs.kernelsu_tag }}        |
+            | OS patch level  | ${{ github.event.inputs.os_patch_level }}      |
+            | Kernels         | ${{ github.event.inputs.kernels }}             |
+
+            ### Included kernel versions
+            | Version          | Build system |
+            |------------------|-------------|
+            | Android 12 / 5.10 | build.sh   |
+            | Android 13 / 5.10 | build.sh   |
+            | Android 13 / 5.15 | build.sh   |
+            | Android 14 / 5.15 | Bazel      |
+            | Android 14 / 6.1  | Bazel      |
+            | Android 15 / 6.6  | Bazel      |
+
+            ### SUSFS config options enabled
+            ```
+            CONFIG_KSU_SUSFS=y
+            CONFIG_KSU_SUSFS_SUS_PATH=y
+            CONFIG_KSU_SUSFS_SUS_MOUNT=y
+            CONFIG_KSU_SUSFS_SUS_KSTAT=y
+            CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y
+            CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+            CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+            CONFIG_KSU_SUSFS_ENABLE_LOG=y
+            CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+            CONFIG_KSU_SUSFS_SUS_SU=y
+            ```
+
+            ### Sources
+            - KernelSU: https://github.com/tiann/KernelSU
+            - SUSFS4KSU: https://gitlab.com/simonpunk/susfs4ksu
+            - Build base: https://github.com/WildKernels/GKI_KernelSU_SUSFS
+
+            > [!WARNING]
+            > Flashing a custom kernel **voids your warranty** and may brick your device.
+            > Always keep a backup. Flash at your own risk.
