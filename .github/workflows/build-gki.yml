@@ -166,7 +166,8 @@ jobs:
               --depth=1
           fi
 
-          # Retry sync up to 3 times
+          # Retry sync up to 3 times; fail loudly if all attempts fail
+          SYNC_OK=false
           for i in 1 2 3; do
             repo sync \
               -c \
@@ -174,10 +175,14 @@ jobs:
               --current-branch \
               --no-clone-bundle \
               --no-tags \
-              --force-sync && break
+              --force-sync && { SYNC_OK=true; break; }
             echo "Sync attempt $i/3 failed; retrying in 15 s..."
             sleep 15
           done
+          if [ "$SYNC_OK" = "false" ]; then
+            echo "ERROR: All sync attempts failed"
+            exit 1
+          fi
 
       # ── 4. Official KernelSU ──────────────────────────────────────────────
       - name: Set up KernelSU (official — tiann/KernelSU)
@@ -267,23 +272,33 @@ jobs:
       - name: Write SUSFS + KSU config options
         run: |
           DEFCONFIG="kernel/common/arch/arm64/configs/gki_defconfig"
-          printf 'CONFIG_KSU=y\n'                    >> "$DEFCONFIG"
-          printf 'CONFIG_KSU_SUSFS=y\n'              >> "$DEFCONFIG"
-          printf 'CONFIG_KSU_SUSFS_SUS_PATH=y\n'     >> "$DEFCONFIG"
-          printf 'CONFIG_KSU_SUSFS_SUS_MOUNT=y\n'    >> "$DEFCONFIG"
-          printf 'CONFIG_KSU_SUSFS_SUS_KSTAT=y\n'    >> "$DEFCONFIG"
+          printf 'CONFIG_KSU=y\n'                     >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS=y\n'               >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_SUS_PATH=y\n'      >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_SUS_MOUNT=y\n'     >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_SUS_KSTAT=y\n'     >> "$DEFCONFIG"
           printf 'CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y\n' >> "$DEFCONFIG"
-          printf 'CONFIG_KSU_SUSFS_TRY_UMOUNT=y\n'   >> "$DEFCONFIG"
-          printf 'CONFIG_KSU_SUSFS_SPOOF_UNAME=y\n'  >> "$DEFCONFIG"
-          printf 'CONFIG_KSU_SUSFS_ENABLE_LOG=y\n'   >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_TRY_UMOUNT=y\n'    >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_SPOOF_UNAME=y\n'   >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_ENABLE_LOG=y\n'    >> "$DEFCONFIG"
           printf 'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y\n' >> "$DEFCONFIG"
-          printf 'CONFIG_KSU_SUSFS_SUS_SU=y\n'       >> "$DEFCONFIG"
+          printf 'CONFIG_KSU_SUSFS_SUS_SU=y\n'        >> "$DEFCONFIG"
           echo "Config appended to gki_defconfig"
 
-          # For Bazel: also write a fragment file and export its label
+          # For Bazel: write a fragment (only the new options, not the full defconfig)
           if [[ "${{ matrix.build_method }}" == "bazel" ]]; then
             FRAGMENT="kernel/common/arch/arm64/configs/gki_ksu_susfs.fragment"
-            cp "$DEFCONFIG" "$FRAGMENT"
+            printf 'CONFIG_KSU=y\n'                     > "$FRAGMENT"
+            printf 'CONFIG_KSU_SUSFS=y\n'               >> "$FRAGMENT"
+            printf 'CONFIG_KSU_SUSFS_SUS_PATH=y\n'      >> "$FRAGMENT"
+            printf 'CONFIG_KSU_SUSFS_SUS_MOUNT=y\n'     >> "$FRAGMENT"
+            printf 'CONFIG_KSU_SUSFS_SUS_KSTAT=y\n'     >> "$FRAGMENT"
+            printf 'CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y\n' >> "$FRAGMENT"
+            printf 'CONFIG_KSU_SUSFS_TRY_UMOUNT=y\n'    >> "$FRAGMENT"
+            printf 'CONFIG_KSU_SUSFS_SPOOF_UNAME=y\n'   >> "$FRAGMENT"
+            printf 'CONFIG_KSU_SUSFS_ENABLE_LOG=y\n'    >> "$FRAGMENT"
+            printf 'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y\n' >> "$FRAGMENT"
+            printf 'CONFIG_KSU_SUSFS_SUS_SU=y\n'        >> "$FRAGMENT"
             echo "SUSFS_FRAGMENT=//common:arch/arm64/configs/gki_ksu_susfs.fragment" >> "$GITHUB_ENV"
             echo "Fragment written to ${FRAGMENT}"
           fi
@@ -293,12 +308,26 @@ jobs:
         if: matrix.build_method == 'legacy'
         run: |
           cd kernel
+
+          echo "=== Build environment check ==="
+          ls -la build/ 2>/dev/null || { echo "ERROR: build/ directory not found"; exit 1; }
+          test -f build/build.sh || { echo "ERROR: build/build.sh not found"; exit 1; }
+          echo "build/build.sh found"
+
+          # GKI_BUILD_CONFIG_FRAGMENT: sourced by build.sh to override build settings
+          GKI_BUILD_CONFIG_FRAGMENT="/tmp/gki_ci.fragment"
+          printf 'BUILD_GKI_ARTIFACTS=\n'           > "$GKI_BUILD_CONFIG_FRAGMENT"
+          printf 'BUILD_GKI_CERTIFICATION_TOOLS=0\n' >> "$GKI_BUILD_CONFIG_FRAGMENT"
+          printf 'BUILD_SYSTEM_DLKM=0\n'             >> "$GKI_BUILD_CONFIG_FRAGMENT"
+          printf 'SKIP_VENDOR_BOOT=1\n'              >> "$GKI_BUILD_CONFIG_FRAGMENT"
+          printf 'SKIP_EXT_MODULES=1\n'              >> "$GKI_BUILD_CONFIG_FRAGMENT"
+          printf 'SKIP_CP_KERNEL_HDR=1\n'            >> "$GKI_BUILD_CONFIG_FRAGMENT"
+          printf 'SKIP_MRPROPER=1\n'                 >> "$GKI_BUILD_CONFIG_FRAGMENT"
+
           mkdir -p "${OUT_DIR}"
-          SKIP_VENDOR_BOOT=1 \
-          SKIP_EXT_MODULES=1 \
-          SKIP_CP_KERNEL_HDR=1 \
-          LTO=thin \
           OUT_DIR="${OUT_DIR}" \
+          LTO=thin \
+          GKI_BUILD_CONFIG_FRAGMENT="${GKI_BUILD_CONFIG_FRAGMENT}" \
           BUILD_CONFIG="${{ matrix.build_config }}" \
             build/build.sh -j"$(nproc)"
 
