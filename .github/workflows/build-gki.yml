@@ -218,74 +218,69 @@ jobs:
           fi
 
       - name: Apply SUSFS kernel patches
-        working-directory: kernel/common
         run: |
+          VERSION="${{ matrix.version }}"
           PATCH_DIR="${SUSFS_DIR}/kernel_patches"
-          shopt -s nullglob
 
-          echo "=== Applying kernel patches from ${PATCH_DIR} ==="
-          for patch in "${PATCH_DIR}"/*.patch; do
-            echo "  → $(basename "${patch}")"
-            if ! patch -p1 --forward < "${patch}"; then
-              echo "    patch(1) failed — retrying with git apply..."
-              git apply --reject "${patch}" || {
-                echo "    WARNING: patch $(basename "${patch}") had rejects — continuing"
-              }
-            fi
-          done
+          # Copy SUSFS source files directly into the kernel tree
+          if [ -d "${PATCH_DIR}/fs" ]; then
+            echo "Copying SUSFS fs/ sources..."
+            cp -r "${PATCH_DIR}/fs/." kernel/common/fs/
+          fi
+          if [ -d "${PATCH_DIR}/include/linux" ]; then
+            echo "Copying SUSFS include/linux/ sources..."
+            cp -r "${PATCH_DIR}/include/linux/." kernel/common/include/linux/
+          fi
 
-          for patch in "${PATCH_DIR}"/**/*.patch; do
-            echo "  → $(basename "${patch}")"
-            patch -p1 --forward < "${patch}" || \
-              git apply --reject "${patch}" || true
-          done
+          # Apply the one version-specific kernel patch
+          MAIN_PATCH="${PATCH_DIR}/50_add_susfs_in_gki-${VERSION}.patch"
+          if [ -f "${MAIN_PATCH}" ]; then
+            echo "Applying: $(basename "${MAIN_PATCH}")"
+            patch -p1 -d kernel/common < "${MAIN_PATCH}"
+          else
+            echo "WARNING: patch not found at ${MAIN_PATCH}"
+            echo "Available patches:"
+            ls "${PATCH_DIR}"/*.patch 2>/dev/null || echo "  (none)"
+          fi
 
       - name: Apply SUSFS KernelSU patches
-        working-directory: kernel/common/KernelSU
         run: |
           PATCH_DIR="${SUSFS_DIR}/ksu_patches"
-          shopt -s nullglob
+          if [ ! -d "${PATCH_DIR}" ]; then
+            echo "No ksu_patches directory — skipping"
+            exit 0
+          fi
 
-          echo "=== Applying KernelSU patches from ${PATCH_DIR} ==="
-          for patch in "${PATCH_DIR}"/*.patch; do
-            echo "  → $(basename "${patch}")"
-            if ! patch -p1 --forward < "${patch}"; then
-              echo "    patch(1) failed — retrying with git apply..."
-              git apply --reject "${patch}" || {
-                echo "    WARNING: patch $(basename "${patch}") had rejects — continuing"
-              }
-            fi
+          shopt -s nullglob
+          patches=("${PATCH_DIR}"/*.patch)
+          if [ ${#patches[@]} -eq 0 ]; then
+            echo "No KSU patches found — skipping"
+            exit 0
+          fi
+
+          for patch in "${patches[@]}"; do
+            echo "Applying KSU patch: $(basename "${patch}")"
+            patch -p1 -d kernel/common/KernelSU < "${patch}"
           done
 
       # ── 6. Kernel configuration ───────────────────────────────────────────
       - name: Write SUSFS + KSU config options
         run: |
-          CONFIGS=$(cat << 'CFGEOF'
-          CONFIG_KSU=y
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KSU_SUSFS_SUS_SU=y
-          CFGEOF
-          )
-
-          if [[ "${{ matrix.build_method }}" == "legacy" ]]; then
-            DEFCONFIG="kernel/common/arch/arm64/configs/gki_defconfig"
-            echo "${CONFIGS}" >> "${DEFCONFIG}"
-            echo "Config written to ${DEFCONFIG}"
-          else
-            FRAGMENT="kernel/common/arch/arm64/configs/gki_ksu_susfs.fragment"
-            echo "${CONFIGS}" > "${FRAGMENT}"
-            echo "SUSFS_FRAGMENT=//common:arch/arm64/configs/gki_ksu_susfs.fragment" \
-              >> $GITHUB_ENV
-            echo "Config fragment written to ${FRAGMENT}"
-          fi
+          DEFCONFIG="kernel/common/arch/arm64/configs/gki_defconfig"
+          cat >> "${DEFCONFIG}" << 'EOF'
+CONFIG_KSU=y
+CONFIG_KSU_SUSFS=y
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+CONFIG_KSU_SUSFS_SUS_OVERLAYFS=y
+CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_ENABLE_LOG=y
+CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+CONFIG_KSU_SUSFS_SUS_SU=y
+EOF
+          echo "KSU/SUSFS config appended to ${DEFCONFIG}"
 
       # ── 7. Build ──────────────────────────────────────────────────────────
       - name: Build kernel (legacy — build.sh)
@@ -293,26 +288,20 @@ jobs:
         run: |
           cd kernel
           mkdir -p "${OUT_DIR}"
+          JOBS=$(nproc --all) \
           LTO=thin \
           OUT_DIR="${OUT_DIR}" \
           BUILD_CONFIG="${{ matrix.build_config }}" \
-            build/build.sh -j$(nproc --all)
+            build/build.sh
 
       - name: Build kernel (Bazel — kleaf)
         if: matrix.build_method == 'bazel'
         run: |
           cd kernel
           mkdir -p "${OUT_DIR}/dist"
-
-          FRAGMENT_ARG=""
-          if [[ -n "${{ env.SUSFS_FRAGMENT }}" ]]; then
-            FRAGMENT_ARG="--defconfig_fragment=${{ env.SUSFS_FRAGMENT }}"
-          fi
-
           tools/bazel run \
             --config=fast \
             --config=stamp \
-            ${FRAGMENT_ARG} \
             //common:kernel_aarch64_dist \
             -- --dist_dir="${OUT_DIR}/dist"
 
