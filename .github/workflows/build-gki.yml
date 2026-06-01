@@ -236,7 +236,7 @@ jobs:
           MAIN_PATCH="${PATCH_DIR}/50_add_susfs_in_gki-${VERSION}.patch"
           if [ -f "${MAIN_PATCH}" ]; then
             echo "Applying: $(basename "${MAIN_PATCH}")"
-            patch -p1 -d kernel/common < "${MAIN_PATCH}"
+            patch -p1 --fuzz=3 -d kernel/common < "${MAIN_PATCH}"
           else
             echo "WARNING: patch not found at ${MAIN_PATCH}"
             echo "Available patches:"
@@ -245,9 +245,9 @@ jobs:
 
       - name: Apply SUSFS KernelSU patches
         run: |
-          PATCH_DIR="${SUSFS_DIR}/ksu_patches"
+          PATCH_DIR="${SUSFS_DIR}/kernel_patches/KernelSU"
           if [ ! -d "${PATCH_DIR}" ]; then
-            echo "No ksu_patches directory — skipping"
+            echo "No kernel_patches/KernelSU directory — skipping"
             exit 0
           fi
 
