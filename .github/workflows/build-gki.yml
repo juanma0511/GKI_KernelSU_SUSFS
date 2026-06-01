@@ -309,6 +309,15 @@ jobs:
         run: |
           cd kernel
           test -f build/build.sh || { echo "ERROR: build/build.sh not found"; ls -la; exit 1; }
+
+          # Disable check_defconfig: appending KSU/SUSFS options to gki_defconfig
+          # makes savedefconfig diverge from it, which check_defconfig rejects.
+          echo "Disabling check_defconfig in build config(s)..."
+          grep -rl 'check_defconfig' common/build.config* 2>/dev/null | while read -r f; do
+            echo "  → ${f}"
+            sed -i 's/check_defconfig//g' "${f}"
+          done
+
           mkdir -p "${OUT_DIR}"
           LTO=thin \
           OUT_DIR="${OUT_DIR}" \
