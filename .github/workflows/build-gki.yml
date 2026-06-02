@@ -189,6 +189,17 @@ jobs:
           echo "KernelSU version : ${KSU_VER}  (version code: ${KSU_CODE})"
           popd > /dev/null
 
+          # Newer GKI toolchains (e.g. android15-6.6) promote warnings such as
+          # -Wpointer-bool-conversion to errors, which trips KSU's own sources
+          # (drivers/kernelsu/feature/selinux_hide.c). KSU's Kbuild already
+          # silences several warnings; add a catch-all so its warnings can never
+          # be fatal — scoped to the KSU module only, not the whole kernel.
+          KSU_KBUILD="KernelSU/kernel/Kbuild"
+          if [ -f "${KSU_KBUILD}" ]; then
+            printf '\nccflags-y += -Wno-error\n' >> "${KSU_KBUILD}"
+            echo "Appended '-Wno-error' to ${KSU_KBUILD}"
+          fi
+
       # ── 5. SUSFS patches ──────────────────────────────────────────────────
       - name: Clone SUSFS4KSU — branch ${{ matrix.susfs_branch }}
         run: |
@@ -231,6 +242,27 @@ jobs:
             patch -p1 --fuzz=3 --forward -d kernel/common < "${MAIN_PATCH}" || true
             echo "--- Rejected hunks (skipped), if any: ---"
             find kernel/common -name '*.rej' -print 2>/dev/null || true
+
+            # fs/namespace.c hunk #1 is special: it DECLARES the SUS_MOUNT symbols
+            # (susfs_def.h include, externs, CL_COPY_MNT_NS) that the other hunks
+            # USE. Upstream inserted "#include <trace/hooks/blk.h>" mid-context on
+            # some branches, so the hunk rejects — and skipping it leaves the
+            # applied hunks referencing undeclared identifiers. Re-inject the
+            # declaration block manually before the mount_max sysctl definition.
+            NS="kernel/common/fs/namespace.c"
+            if [ -f "${NS}.rej" ] && ! grep -q 'susfs_is_current_ksu_domain' "${NS}"; then
+              echo "Re-injecting SUS_MOUNT declarations into fs/namespace.c"
+              awk '/sysctl_mount_max __read_mostly/ && !done {
+                print "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT";
+                print "#include <linux/susfs_def.h>";
+                print "extern bool susfs_is_current_ksu_domain(void);";
+                print "extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;";
+                print "#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */";
+                print "#endif";
+                done=1
+              } { print }' "${NS}" > "${NS}.tmp" && mv "${NS}.tmp" "${NS}"
+              rm -f "${NS}.rej"
+            fi
           else
             echo "WARNING: patch not found at ${MAIN_PATCH}"
             echo "Available patches:"
