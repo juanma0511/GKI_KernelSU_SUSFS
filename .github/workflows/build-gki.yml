@@ -249,8 +249,12 @@ jobs:
             # some branches, so the hunk rejects — and skipping it leaves the
             # applied hunks referencing undeclared identifiers. Re-inject the
             # declaration block manually before the mount_max sysctl definition.
+            # Gate on the .rej only. Do NOT grep for the symbol name to decide:
+            # the symbol already appears in the file via the *applied* hunks
+            # (they call it), so a name grep wrongly concludes the declaration is
+            # present and skips injection. The .rej is the true "hunk failed" flag.
             NS="kernel/common/fs/namespace.c"
-            if [ -f "${NS}.rej" ] && ! grep -q 'susfs_is_current_ksu_domain' "${NS}"; then
+            if [ -f "${NS}.rej" ]; then
               echo "Re-injecting SUS_MOUNT declarations into fs/namespace.c"
               awk '/sysctl_mount_max __read_mostly/ && !done {
                 print "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT";
