@@ -275,20 +275,23 @@ jobs:
           printf 'CONFIG_KSU_SUSFS_SUS_SU=y\n'        >> "$DEFCONFIG"
           echo "Config appended to gki_defconfig (read by both legacy and Bazel builds)"
 
+          # Disable check_defconfig for BOTH build methods: appending KSU/SUSFS
+          # options to gki_defconfig makes `savedefconfig` diverge from it (the
+          # canonicalised defconfig drops them), which check_defconfig rejects
+          # with "savedefconfig does not match ... gki_defconfig". kleaf runs
+          # this check inside POST_DEFCONFIG_CMDS just like build.sh does.
+          echo "Disabling check_defconfig in build config(s)..."
+          grep -rl 'check_defconfig' kernel/common/build.config* 2>/dev/null | while read -r f; do
+            echo "  → ${f}"
+            sed -i 's/check_defconfig//g' "${f}"
+          done
+
       # ── 7. Build ──────────────────────────────────────────────────────────
       - name: Build kernel (legacy — build.sh)
         if: matrix.build_method == 'legacy'
         run: |
           cd kernel
           test -f build/build.sh || { echo "ERROR: build/build.sh not found"; ls -la; exit 1; }
-
-          # Disable check_defconfig: appending KSU/SUSFS options to gki_defconfig
-          # makes savedefconfig diverge from it, which check_defconfig rejects.
-          echo "Disabling check_defconfig in build config(s)..."
-          grep -rl 'check_defconfig' common/build.config* 2>/dev/null | while read -r f; do
-            echo "  → ${f}"
-            sed -i 's/check_defconfig//g' "${f}"
-          done
 
           mkdir -p "${OUT_DIR}"
           LTO=thin \
