@@ -342,7 +342,7 @@ jobs:
           echo "--- Artifact contents ---"
           ls -lh "${ARTIFACT_DIR}/"
 
-      - name: Package flashable AnyKernel3 zip
+      - name: Assemble AnyKernel3 (no inner zip)
         run: |
           ARTIFACT_DIR="${GITHUB_WORKSPACE}/artifacts"
 
@@ -352,30 +352,32 @@ jobs:
             if [ -f "${ARTIFACT_DIR}/${cand}" ]; then IMG="${cand}"; break; fi
           done
           if [ -z "${IMG}" ]; then
-            echo "No kernel Image found — skipping AnyKernel3 packaging"
+            echo "No kernel Image found — skipping AnyKernel3 assembly"
             exit 0
           fi
 
           echo "Cloning AnyKernel3 (gki-2.0)..."
           git clone --depth=1 -b gki-2.0 \
             https://github.com/juanma0511/AnyKernel3.git ak3
+          rm -rf ak3/.git
 
           # AnyKernel3 flashes the image named "Image" from the zip root
           cp -v "${ARTIFACT_DIR}/${IMG}" "ak3/Image"
 
-          ZIP_NAME="AnyKernel3-${{ matrix.version }}-KernelSU-${KSU_TAG}-SUSFS-$(date +%Y%m%d).zip"
-          ( cd ak3 && zip -r9 "${ARTIFACT_DIR}/${ZIP_NAME}" . -x '.git*' )
-          echo "Created ${ZIP_NAME}"
+          # The uploaded artifact is itself a zip, so we DON'T create an inner
+          # zip here — we upload the ak3/ contents directly. The downloaded
+          # artifact then IS the flashable AnyKernel3 zip (files at its root).
+          AK3_NAME="AnyKernel3-${{ matrix.version }}-KernelSU-${KSU_TAG}-SUSFS-$(date +%Y%m%d)"
+          echo "AK3_NAME=${AK3_NAME}" >> "$GITHUB_ENV"
+          echo "Artifact will be uploaded as: ${AK3_NAME}.zip"
+          echo "--- AnyKernel3 root contents ---"
+          ls -lh ak3/
 
-          echo "--- Final artifact contents ---"
-          ls -lh "${ARTIFACT_DIR}/"
-
-      - name: Upload artifacts — ${{ matrix.version }}
+      - name: Upload flashable AnyKernel3 — ${{ matrix.version }}
         uses: actions/upload-artifact@v4
         with:
-          name: >-
-            kernel-${{ matrix.version }}-KernelSU-${{ env.KSU_TAG }}-SUSFS
-          path: artifacts/*.zip
+          name: ${{ env.AK3_NAME }}
+          path: ak3/*
           if-no-files-found: warn
           compression-level: 9
           retention-days: 14
