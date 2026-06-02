@@ -64,8 +64,7 @@ Android GKI kernels built with **official KernelSU** and **SUSFS** root-hiding p
 │  3. Set up KernelSU  (official setup.sh → tiann/KernelSU)          │
 │  4. Clone susfs4ksu  (version-matched branch)                       │
 │     ├── Apply 50_add_susfs_in_gki-*.patch → kernel/common         │
-│     └── Apply KernelSU/*.patch            → kernel/common/KernelSU │
-│        (rejected hunks are skipped, never fatal — see note below)   │
+│     └── Apply KernelSU/*.patch            → kernel/common/KernelSU │                                                                  │
 │  5. Append SUSFS/KSU config options to gki_defconfig                │
 │     └── strip check_defconfig (both build.sh and Kleaf)            │
 │  6. Build                                                           │
@@ -105,14 +104,6 @@ Patches are pulled from the matching branch of [`simonpunk/susfs4ksu`](https://g
 |-------|-----------|
 | `kernel_patches/50_add_susfs_in_gki-<version>.patch` | Kernel source (`kernel/common`) |
 | `kernel_patches/KernelSU/*.patch` | KernelSU source (`kernel/common/KernelSU`) |
-
-If a version-specific SUSFS branch is unavailable, the workflow falls back to `gki-android14-5.15`.
-
-> [!NOTE]
-> Patches are applied with `--fuzz=3 --forward`, and **rejected hunks do not fail
-> the build**. SUSFS tracks a moving GKI base, so when a hunk no longer matches
-> the current source it is simply skipped (that one feature is left unpatched)
-> and any `*.rej` files are listed in the build log.
 
 ---
 
