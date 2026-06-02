@@ -10,8 +10,8 @@ Android GKI kernels built with **official KernelSU** and **SUSFS** root-hiding p
 
 ## Features
 
-| Feature | Source |
-|---------|--------|
+| Feature | Description | Source |
+|---------|-------------|--------|
 | **KernelSU** (official) | Root solution operating entirely in kernel space | [`tiann/KernelSU`](https://github.com/tiann/KernelSU) |
 | **SUSFS** | Kernel-level root-hiding patches + KernelSU hooks | [`simonpunk/susfs4ksu`](https://gitlab.com/simonpunk/susfs4ksu) |
 
@@ -44,9 +44,12 @@ Android GKI kernels built with **official KernelSU** and **SUSFS** root-hiding p
 | Input | Description | Default |
 |-------|-------------|---------|
 | `kernelsu_tag` | KernelSU branch or tag to use (e.g. `main`, `v1.0.5`) | `main` |
-| `os_patch_level` | Android security patch level (`YYYY-MM`) | `2025-05` |
 | `kernels` | Which kernels to build (`all` or a specific version) | `all` |
 | `release` | Automatically publish a GitHub Release on success | `false` |
+
+> Security-patch (OS patch level) pinning is **disabled** — each job syncs the
+> base GKI manifest branch directly (e.g. `common-android13-5.10`) instead of a
+> `-YYYY-MM` patch-level branch.
 
 ---
 
@@ -60,15 +63,21 @@ Android GKI kernels built with **official KernelSU** and **SUSFS** root-hiding p
 │  2. Sync kernel sources  (repo tool → android.googlesource.com)     │
 │  3. Set up KernelSU  (official setup.sh → tiann/KernelSU)          │
 │  4. Clone susfs4ksu  (version-matched branch)                       │
-│     ├── Apply kernel_patches/*.patch  → kernel/common              │
-│     └── Apply ksu_patches/*.patch     → kernel/common/KernelSU     │
-│  5. Write SUSFS config options to defconfig / Kleaf fragment        │
+│     ├── Apply 50_add_susfs_in_gki-*.patch → kernel/common         │
+│     └── Apply KernelSU/*.patch            → kernel/common/KernelSU │
+│        (rejected hunks are skipped, never fatal — see note below)   │
+│  5. Append SUSFS/KSU config options to gki_defconfig                │
+│     └── strip check_defconfig (both build.sh and Kleaf)            │
 │  6. Build                                                           │
 │     ├── Android 12–13/5.10–5.15 → LTO=thin build/build.sh          │
 │     └── Android 14–15/5.15–6.6  → tools/bazel run …kernel_aarch64  │
-│  7. Upload Image / Image.lz4 / Image.gz / *.ko as artifacts        │
+│  7. Assemble AnyKernel3 + upload the flashable zip as the artifact  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+> Builds run from a clean checkout each time — there is **no ccache / Bazel
+> disk-cache** layer. The artifact-based cache was removed because restoring and
+> re-uploading the multi-GB tarball every run was slower than a cold build.
 
 ### SUSFS config options enabled
 
@@ -92,29 +101,39 @@ CONFIG_KSU_SUSFS_SUS_SU=y
 
 Patches are pulled from the matching branch of [`simonpunk/susfs4ksu`](https://gitlab.com/simonpunk/susfs4ksu):
 
-| Branch | Applied to |
-|--------|-----------|
-| `kernel_patches/*.patch` | Kernel source (`kernel/common`) |
-| `ksu_patches/*.patch` | KernelSU source (`kernel/common/KernelSU`) |
+| Patch | Applied to |
+|-------|-----------|
+| `kernel_patches/50_add_susfs_in_gki-<version>.patch` | Kernel source (`kernel/common`) |
+| `kernel_patches/KernelSU/*.patch` | KernelSU source (`kernel/common/KernelSU`) |
 
-If a version-specific branch is unavailable, the workflow falls back to `gki-android14-5.15`.
+If a version-specific SUSFS branch is unavailable, the workflow falls back to `gki-android14-5.15`.
+
+> [!NOTE]
+> Patches are applied with `--fuzz=3 --forward`, and **rejected hunks do not fail
+> the build**. SUSFS tracks a moving GKI base, so when a hunk no longer matches
+> the current source it is simply skipped (that one feature is left unpatched)
+> and any `*.rej` files are listed in the build log.
 
 ---
 
 ## Artifacts
 
-Each build job uploads a named artifact:
+Each build job uploads a single **flashable AnyKernel3 zip** as its artifact.
+Because GitHub always zips an artifact on download, the kernel `Image` is placed
+inside the AnyKernel3 tree and uploaded directly — so the downloaded artifact
+*is* the flashable zip (no zip-inside-a-zip):
 
 ```
-kernel-<version>-KernelSU-<tag>-SUSFS-<patch-level>
-├── Image
-├── Image.lz4   (if produced)
-├── Image.gz    (if produced)
-├── System.map  (if produced)
-└── *.ko        (if produced)
+AnyKernel3-<version>-KernelSU-<tag>-SUSFS-<YYYYMMDD>.zip
+├── anykernel.sh
+├── tools/
+├── META-INF/
+└── Image          ← the built kernel
 ```
 
-Artifacts are retained for **14 days**. Enable `release: true` in the workflow dispatch to publish them as a versioned GitHub Release tagged `rN`.
+Flash it directly in a custom recovery (TWRP, etc.). Artifacts are retained for
+**14 days**. Enable `release: true` in the workflow dispatch to publish them as a
+versioned GitHub Release tagged `rN`.
 
 ---
 
