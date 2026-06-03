@@ -316,13 +316,32 @@ jobs:
           # Disable check_defconfig for BOTH build methods: appending KSU/SUSFS
           # options to gki_defconfig makes `savedefconfig` diverge from it (the
           # canonicalised defconfig drops them), which check_defconfig rejects
-          # with "savedefconfig does not match ... gki_defconfig". kleaf runs
-          # this check inside POST_DEFCONFIG_CMDS just like build.sh does.
+          # with "savedefconfig does not match ... gki_defconfig".
+          #
+          # (1) Older kernels invoke it via POST_DEFCONFIG_CMDS in build.config*,
+          #     so strip the call there.
           echo "Disabling check_defconfig in build config(s)..."
           grep -rl 'check_defconfig' kernel/common/build.config* 2>/dev/null | while read -r f; do
             echo "  → ${f}"
             sed -i 's/check_defconfig//g' "${f}"
           done
+
+          # (2) On newer kleaf (android16-6.12), the kernel_config action runs
+          #     check_defconfig itself, independent of POST_DEFCONFIG_CMDS — so
+          #     stripping the call site above is not enough. Neutralise the
+          #     function DEFINITION wherever it lives in the synced build/ tree
+          #     by making it return 0 immediately (the original body becomes
+          #     harmless dead code). This kills the check no matter who calls it.
+          echo "Neutralising check_defconfig() function definition..."
+          DEF_FILES=$(grep -rIl --include='*.sh' -e 'check_defconfig\s*()' kernel/build kernel/common 2>/dev/null || true)
+          if [ -z "${DEF_FILES}" ]; then
+            echo "  (no check_defconfig() definition found)"
+          else
+            for f in ${DEF_FILES}; do
+              echo "  → ${f}"
+              perl -0pi -e 's/((?:function\s+)?check_defconfig\s*\(\)\s*\{)/$1\n  return 0;/g' "${f}"
+            done
+          fi
 
       # ── 7. Build ──────────────────────────────────────────────────────────
       - name: Build kernel (legacy — build.sh)
