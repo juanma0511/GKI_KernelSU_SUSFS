@@ -32,6 +32,7 @@ on:
           - android14-5.15
           - android14-6.1
           - android15-6.6
+          - android16-6.12
       release:
         description: 'Create GitHub Release after successful build'
         required: false
@@ -60,7 +61,8 @@ jobs:
             {"version":"android13-5.15","android_version":"android13","kernel_version":"5.15","manifest_branch":"common-android13-5.15","susfs_branch":"gki-android13-5.15","build_method":"bazel","build_config":""},
             {"version":"android14-5.15","android_version":"android14","kernel_version":"5.15","manifest_branch":"common-android14-5.15","susfs_branch":"gki-android14-5.15","build_method":"bazel","build_config":""},
             {"version":"android14-6.1","android_version":"android14","kernel_version":"6.1","manifest_branch":"common-android14-6.1","susfs_branch":"gki-android14-6.1","build_method":"bazel","build_config":""},
-            {"version":"android15-6.6","android_version":"android15","kernel_version":"6.6","manifest_branch":"common-android15-6.6","susfs_branch":"gki-android15-6.6","build_method":"bazel","build_config":""}
+            {"version":"android15-6.6","android_version":"android15","kernel_version":"6.6","manifest_branch":"common-android15-6.6","susfs_branch":"gki-android15-6.6","build_method":"bazel","build_config":""},
+            {"version":"android16-6.12","android_version":"android16","kernel_version":"6.12","manifest_branch":"common-android16-6.12","susfs_branch":"gki-android16-6.12","build_method":"bazel","build_config":""}
           ]'
           if [[ "$KERNELS" == "all" ]]; then
             INCLUDE="$ALL"
@@ -445,6 +447,33 @@ jobs:
           echo "tag=${TAG}" >> $GITHUB_OUTPUT
           echo "Release tag: ${TAG}"
 
+      # download-artifact extracts each artifact into its own subdirectory, but
+      # every per-kernel AnyKernel3 artifact shares the SAME helper filenames
+      # (anykernel.sh, LICENSE, busybox, ...) and a generic "Image". Attaching
+      # them flat to one release collides on basename — release assets are keyed
+      # by name only — which trips overwrite_files into a storm of "Not Found"
+      # errors and fails the publish. Repackage each subdir back into a single
+      # uniquely-named zip (the dir name encodes version+KSU+date) so the release
+      # carries one flashable zip per kernel with no name collisions.
+      - name: Repackage each kernel artifact into a uniquely-named flashable zip
+        run: |
+          mkdir -p release-zips
+          shopt -s nullglob
+          found=false
+          for dir in release-artifacts/*/; do
+            name="$(basename "${dir}")"
+            echo "Zipping ${name}.zip ..."
+            ( cd "${dir}" && zip -r -9 "${GITHUB_WORKSPACE}/release-zips/${name}.zip" . )
+            found=true
+          done
+          if [ "${found}" = "false" ]; then
+            echo "ERROR: no artifact directories found under release-artifacts/"
+            ls -la release-artifacts/ || true
+            exit 1
+          fi
+          echo "--- release-zips ---"
+          ls -lh release-zips/
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -452,7 +481,7 @@ jobs:
           name:       "GKI KernelSU+SUSFS — Build #${{ github.run_number }}"
           draft:      false
           prerelease: false
-          files:      release-artifacts/**/*
+          files:      release-zips/*.zip
           body: |
             ## GKI Kernels · KernelSU (official) + SUSFS 2.1.0
 
@@ -471,6 +500,7 @@ jobs:
             | Android 14 / 5.15 | Bazel      |
             | Android 14 / 6.1  | Bazel      |
             | Android 15 / 6.6  | Bazel      |
+            | Android 16 / 6.12 | Bazel      |
 
             ### SUSFS config options enabled
             ```
